@@ -1,5 +1,7 @@
-.global test_guest
-.global test_guest_end
+.global guest_entry_16
+.global guest_entry_32
+.global guest_entry_64
+.global guest_end
 
 .macro IDT_DESC selector,offset
 code_offset = 0x2000 + 0x7c00
@@ -10,7 +12,6 @@ cs = 0x30
 
 .text
 .code16
-test_guest:
 guest_entry_16:
 
 	movw $0, %ax
@@ -19,7 +20,7 @@ guest_entry_16:
 
 .align 16
 gdt:
-desc_null:		.octa 0
+desc_null:	.octa 0
 desc_code32:	.octa 0x004f98000000ffff
 desc_data32:	.octa 0x00cf92000000ffff
 desc_code64:	.octa 0x002f98000000ffff
@@ -98,6 +99,7 @@ guest_entry_32:
 
 .code64
 guest_entry_64:
+	lgdt 0x7c00 + gdt_desc - guest_entry_16
 	mov $(desc_data64 - gdt), %ax
 	mov %ax, %ds
 	mov %ax, %es
@@ -128,7 +130,7 @@ intr_handler:
 	sti
 	iretq
 
-test_guest_end:
+guest_end:
 	nop
 
 .code16

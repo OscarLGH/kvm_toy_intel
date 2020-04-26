@@ -615,11 +615,12 @@ static int alloc_guest_memory(struct vmx_vcpu *vcpu, u64 gpa, int pg_cnt_order)
 
 static void copy_code_to_guest(struct vmx_vcpu *vcpu)
 {
-	extern u64 test_guest, test_guest_end;
+	extern u64 guest_entry_16;
+	extern u64 guest_end;
 	u8 *guest_memory = page_address(vcpu->guest_state.guest_memory);
 	u64 *page_ptr;
 
-	__builtin_memcpy(guest_memory + 0x7c00, &test_guest, (u64)&test_guest_end - (u64)&test_guest);
+	__builtin_memcpy(guest_memory + 0x7c00, &guest_entry_16, (u64)&guest_end - (u64)&guest_entry_16);
 	// Setup guest page table for directly stepping into longmode.
 	page_ptr = (u64 *)(guest_memory + 0x10000);
 	page_ptr[0] = 0x11003;
@@ -764,10 +765,8 @@ static void vmx_ctrl_setup(struct vmx_vcpu *vcpu)
 	printk("vm_exit_ctrl:%llx\n", vm_exit_ctrl);
 	__vmwrite(VM_EXIT_CONTROLS, vm_exit_ctrl);
 	__vmwrite(CR3_TARGET_COUNT, 0);
-	__vmwrite(CR0_GUEST_HOST_MASK,
-		vcpu->vmx_cap_msrs.vmx_cr0_fixed0 & vcpu->vmx_cap_msrs.vmx_cr0_fixed1 & 0xfffffffe);
-	__vmwrite(CR4_GUEST_HOST_MASK,
-		vcpu->vmx_cap_msrs.vmx_cr4_fixed0 & vcpu->vmx_cap_msrs.vmx_cr4_fixed1);
+	__vmwrite(CR0_GUEST_HOST_MASK, 0xffffffff);
+	__vmwrite(CR4_GUEST_HOST_MASK, 0xffffffff);
 	__vmwrite(EXCEPTION_BITMAP, 0xffffffff);
 }
 
@@ -860,14 +859,18 @@ void vmx_realmode_guest_init(struct vmx_vcpu *vcpu)
 
 void vmx_comptmode_guest_init(struct vmx_vcpu *vcpu)
 {
+	extern u64 guest_entry_16;
+	extern u64 guest_entry_32;
 	vcpu->guest_state.cs.selector = 0x10;
 	vcpu->guest_state.cs.base = 0;
 	vcpu->guest_state.cs.limit = 0xffff;
 	vcpu->guest_state.cs.ar_bytes = VMX_AR_P_MASK 
 		| VMX_AR_TYPE_READABLE_CODE_MASK 
 		| VMX_AR_TYPE_CODE_MASK 
-		| VMX_AR_TYPE_ACCESSES_MASK 
-		| VMX_AR_S_MASK;
+		| VMX_AR_TYPE_ACCESSES_MASK
+		| VMX_AR_S_MASK
+		| VMX_AR_G_MASK
+		| VMX_AR_DB_MASK;
 
 	vcpu->guest_state.ds.selector = 0;
 	vcpu->guest_state.ds.base = 0;
@@ -919,13 +922,14 @@ void vmx_comptmode_guest_init(struct vmx_vcpu *vcpu)
 	vcpu->guest_state.ldtr.limit = 0xffff;
 	vcpu->guest_state.ldtr.ar_bytes = VMX_AR_UNUSABLE_MASK;
 
-	vcpu->guest_state.gdtr.base = 0;
+	vcpu->guest_state.gdtr.base = 0x7c10;
 	vcpu->guest_state.gdtr.limit = 0xffff;
 	vcpu->guest_state.idtr.base = 0;
 	vcpu->guest_state.idtr.limit = 0xffff;
 	
 	vcpu->guest_state.ctrl_regs.cr0 = 
-		vcpu->vmx_cap_msrs.vmx_cr0_fixed0 & vcpu->vmx_cap_msrs.vmx_cr0_fixed1 & 0x7ffffffe;
+		vcpu->vmx_cap_msrs.vmx_cr0_fixed0 & vcpu->vmx_cap_msrs.vmx_cr0_fixed1 & 0x7fffffff;
+	printk("cr0 = %x\n", vcpu->guest_state.ctrl_regs.cr0);
 	vcpu->guest_state.ctrl_regs.cr2 = 0;
 	vcpu->guest_state.ctrl_regs.cr3 = 0;
 	vcpu->guest_state.ctrl_regs.cr4 = 
@@ -939,7 +943,7 @@ void vmx_comptmode_guest_init(struct vmx_vcpu *vcpu)
 	vcpu->guest_state.pdpte2 = 0;
 	vcpu->guest_state.pdpte3 = 0;
 
-	vcpu->guest_state.rip = 0x7c9f;
+	vcpu->guest_state.rip = 0x7c00 + (u64)&guest_entry_32 - (u64)&guest_entry_16;
 	vcpu->guest_state.rflags = 0x2;
 	memset(&vcpu->guest_state.gr_regs, 0, sizeof(struct general_regs));
 	vcpu->guest_state.ia32_efer = 0;
@@ -947,12 +951,15 @@ void vmx_comptmode_guest_init(struct vmx_vcpu *vcpu)
 
 void vmx_longmode_guest_init(struct vmx_vcpu *vcpu)
 {
-	vcpu->guest_state.cs.selector = 0;
+	extern u64 guest_entry_16;
+	extern u64 guest_entry_64;
+	vcpu->guest_state.cs.selector = 0x30;
 	vcpu->guest_state.cs.base = 0;
 	vcpu->guest_state.cs.limit = 0xffff;
 	vcpu->guest_state.cs.ar_bytes = VMX_AR_P_MASK 
 		| VMX_AR_TYPE_READABLE_CODE_MASK 
-		| VMX_AR_TYPE_CODE_MASK 
+		| VMX_AR_TYPE_CODE_MASK
+		| VMX_AR_L_MASK
 		| VMX_AR_TYPE_ACCESSES_MASK 
 		| VMX_AR_S_MASK;
 
@@ -1026,7 +1033,7 @@ void vmx_longmode_guest_init(struct vmx_vcpu *vcpu)
 	vcpu->guest_state.pdpte2 = 0;
 	vcpu->guest_state.pdpte3 = 0;
 
-	vcpu->guest_state.rip = 0x7cf9;
+	vcpu->guest_state.rip = 0x7c00 + (u64)&guest_entry_64 - (u64)&guest_entry_16;
 	vcpu->guest_state.rflags = 0x2;
 	memset(&vcpu->guest_state.gr_regs, 0, sizeof(struct general_regs));
 	vcpu->guest_state.ia32_efer = 0x500;
@@ -1255,6 +1262,8 @@ int vmx_handle_cr_access(struct vmx_vcpu *vcpu)
 	);
 
 	if (cr == 0) {
+		vcpu->guest_state.ctrl_regs.cr0 = val;
+		__vmwrite(GUEST_CR0, vcpu->guest_state.ctrl_regs.cr0);
 		vcpu->guest_state.cr0_read_shadow = val;
 		__vmwrite(CR0_READ_SHADOW, vcpu->guest_state.cr0_read_shadow);
 		if ((val & X86_CR0_PG) && (__vmread(GUEST_IA32_EFER) & (1 << 8))) {
@@ -1267,8 +1276,10 @@ int vmx_handle_cr_access(struct vmx_vcpu *vcpu)
 	}
 
 	if (cr == 4) {
+		vcpu->guest_state.ctrl_regs.cr4 = val;
+		__vmwrite(GUEST_CR4, vcpu->guest_state.ctrl_regs.cr4);
 		vcpu->guest_state.cr4_read_shadow = val;
-		__vmwrite(CR4_READ_SHADOW, vcpu->guest_state.cr0_read_shadow);
+		__vmwrite(CR4_READ_SHADOW, vcpu->guest_state.cr4_read_shadow);
 	}
 	vcpu->guest_state.rip += __vmread(VM_EXIT_INSTRUCTION_LEN);
 	return 0;
@@ -1382,6 +1393,12 @@ int vmx_handle_interrupt(struct vmx_vcpu *vcpu)
 	return 0;
 }
 
+int vmx_handle_monitor_trap(struct vmx_vcpu *vcpu)
+{
+	printk("VM-Exit:Monitor Trap.RIP = 0x%llx\n", vcpu->guest_state.rip);
+	return 0;
+}
+
 static int handle_exit(struct vmx_vcpu *vcpu)
 {
 	int ret = 2;
@@ -1443,6 +1460,8 @@ static int handle_exit(struct vmx_vcpu *vcpu)
 			case EXIT_REASON_MSR_LOAD_FAIL:
 			case EXIT_REASON_MWAIT_INSTRUCTION:
 			case EXIT_REASON_MONITOR_TRAP_FLAG:
+				ret = vmx_handle_monitor_trap(vcpu);
+				break;
 			case EXIT_REASON_MONITOR_INSTRUCTION:
 			case EXIT_REASON_PAUSE_INSTRUCTION:
 			case EXIT_REASON_MCE_DURING_VMENTRY:
@@ -1548,8 +1567,9 @@ static int __init vmx_prober_init(void)
 	vmcs_layout_detect(vcpu, vmcs_natural_width_host_state_fields, ARRAY_SIZE(vmcs_natural_width_host_state_fields), 8);
 */
 	vmx_realmode_guest_init(vcpu);
-	//vmx_longmode_guest_init(vcpu);
 	//vmx_comptmode_guest_init(vcpu);
+	//vmx_longmode_guest_init(vcpu);
+
 	alloc_guest_memory(vcpu, 0, 8);
 	copy_code_to_guest(vcpu);
 
